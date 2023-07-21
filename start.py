@@ -135,22 +135,42 @@ def generated_report(MyAXURLHalf,scan_id,target,MyRequestHeaders,MyTargetID):
         report_url = MyAXURLHalf.strip('/') + response.headers['Location']
         print(report_url)
         requests.get(str(report_url),headers=MyRequestHeaders, verify=False)
+
+        unique_report_id = report_url.split("/")[-1]
+
         while True:
             report = get_report(MyAXURLHalf,response.headers['Location'],MyRequestHeaders)
             if not report:
                 time.sleep(5)
             elif report:
                 break
+        
+        # Get current report download links
+        reports_response = requests.get(MyAXURLHalf + "/api/v1/reports?l=20", headers=MyRequestHeaders, verify=False)
+        data = json.loads(reports_response.text)
+
+        pdf_download_link = None
+        for report in data["reports"]:
+            if unique_report_id in report["download"][1]:  # PDF should be the second link
+                pdf_download_link = report["download"][1]
+                break
+        
+        if pdf_download_link is None:
+            print("[ERROR] No PDF found for report: %s" % unique_report_id)
+            return
+
         if(not os.path.exists("reports")):
             os.mkdir("reports")
-            
-        report = requests.get(MyAXURLHalf + report,headers=MyRequestHeaders, verify=False,timeout=120)
-        
+
         filename = str(target.strip('/').split('://')[1]).replace('.','_').replace('/','-')
-        file = "reports/" + filename + "%s.html" % time.strftime("%Y-%m-%d-%H-%M", time.localtime(time.time()))
+
+        # Modify to PDF
+        file = "reports/" + filename + "%s.pdf" % time.strftime("%Y-%m-%d-%H-%M", time.localtime(time.time()))
+        report = requests.get(MyAXURLHalf + pdf_download_link,headers=MyRequestHeaders, verify=False,timeout=120)
         with open(file, "wb") as f:
             f.write(report.content)
-        print("[INFO] %s report have %s.html is generated successfully" % (target,filename))
+        print("[INFO] %s report have %s.pdf is generated successfully" % (target,filename))
+
         try:
             response = client.files_upload(
                 channels=slack_channel,
@@ -160,8 +180,10 @@ def generated_report(MyAXURLHalf,scan_id,target,MyRequestHeaders,MyTargetID):
             print("[INFO] Report file uploaded to Slack: %s" % response['file']['permalink'])
         except Exception as e:
             print("[ERROR] Failed to upload report file to Slack: %s" % str(e))
+
     except Exception as e:
         raise e
+
     finally:
         delete_scan(scan_id,MyAXURLHalf,MyRequestHeaders)
         delete_target(MyTargetID,MyAXURLHalf,MyRequestHeaders)
